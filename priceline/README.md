@@ -1,22 +1,26 @@
-# OfferBearer: Priceline GraphQL Object-Level Authorization Bypass — Cross-Account Hotel Reservation PII via `offerToken`
+# OfferBearer: Priceline GraphQL BOLA. Cross-account hotel reservation PII through offerToken
+
+Found by nichoc0.
 
 ## Abstract
 
-The GraphQL operation `getOfferDetails` authorizes solely on the supplied
-`offerToken` and never verifies that the token's booking belongs to the
-authenticated account. Any authenticated Priceline user can retrieve another
-user's hotel reservation — the booking holder's full name, email address,
-phone number, partial payment card (type + last four), hotel name and street
-address, exact stay dates, and total charges — by supplying that booking's
-`offerToken` with their own session. The server enforces authentication but is
-missing the object-level authorization check: the token is treated as a bearer
-capability.
+The GraphQL operation `getOfferDetails` authorizes on the supplied
+offerToken alone. It never checks that the booking behind that token belongs
+to the authenticated account. Any authenticated Priceline user sends another
+user's offerToken with their own session and receives that user's hotel
+reservation: full name, email address, phone number, hotel name and street
+address, exact stay dates, total charges, and partial payment card (type and
+last four). The server enforces authentication. It does not enforce object
+ownership.
 
 ## Reproduction
 
-Two test accounts, both controlled: Account A holds a hotel booking with
-`offerToken = 10b35f83-bab5-4464-8730-91f6cdb867aa`. Account B (a different
-account, different `custId`) authenticates and sends A's token as its own:
+Two test accounts, both controlled. Account A holds a hotel booking with
+offerToken `10b35f83-bab5-4464-8730-91f6cdb867aa`. Account B is a different
+account with a different custId.
+
+Account B sends the request with its own session and bearer token, and
+account A's token in the variables:
 
 ```http
 POST /pws/v0/pcln-graph/?gqlOp=getOfferDetails HTTP/2
@@ -29,7 +33,8 @@ apollographql-client-name: relax
 {"operationName":"getOfferDetails","variables":{"offerToken":"10b35f83-bab5-4464-8730-91f6cdb867aa","appCode":"DESKTOP"},"extensions":{"persistedQuery":{"version":1,"sha256Hash":"6a7cf9e8f9a38d6a06c5acce72bbfd3daa9fdc1738ab20c5953ae56a749e8ced"}}}
 ```
 
-HTTP 200 returns Account A's booking to Account B:
+The response is HTTP 200 with account A's booking. Verbatim shape, PII
+redacted here:
 
 ```json
 {"data":{"offerDetails":{"offerDetails":{
@@ -39,44 +44,43 @@ HTTP 200 returns Account A's booking to Account B:
   "primaryOffer":{"hotel":"Hotel Caza Fisherman's Wharf, 1300 Columbus Ave, San Francisco","checkIn":"2026-06-23","checkOut":"2026-06-27","totalCharges":"1189.64"}}}}}
 ```
 
-Account B does not own this booking (verified by decoding B's bearer token:
-`sub` and `custId` differ from the booking holder's).
+Decoding account B's bearer token shows `sub` and `custId` values that differ
+from the booking holder. Account B does not own this booking and the server
+returns it anyway.
 
 ## Root Cause
 
-`offerToken` is treated as a bearer capability. The resolver checks that the
-caller is authenticated but not that the offerToken's owning account equals
-the caller's `custId`.
+offerToken is treated as a bearer capability. The resolver checks that the
+caller is authenticated. It does not check that the offerToken's owning
+account equals the caller's custId.
 
 ## Impact
 
 Cross-account disclosure of another user's PII: full name, email, phone
-number, hotel + street address, exact future travel dates, and total charges
-(card type and last four also returned). This is a privacy exposure
-(GDPR/CCPA) with a concrete physical-safety dimension: the response ties a
-named individual to a specific hotel and exact check-in/check-out nights.
-Knowing precisely where a named person will be staying, and on which nights,
-is a stalking and physical-safety exposure beyond ordinary data privacy.
+number, hotel and street address, exact future travel dates, total charges,
+and card type with last four digits. This is a privacy exposure under
+GDPR/CCPA and it has a physical-safety dimension. The response ties a named
+person to a specific hotel on specific nights. That is a stalking exposure,
+not an ordinary data leak.
 
-`offerToken` is a UUIDv4 and not brute-forceable, but it appears in
+The offerToken itself is a UUIDv4 and does not brute force. It appears in
 user-facing URLs (`/relax/cancel/{offerToken}`,
-`/travel-itinerary/?offertoken={offerToken}`), so it reaches browser history,
-server and proxy logs, and shared "view my itinerary" links and emails. Once
-the token is held, a single authorized read returns the victim's data.
+`/travel-itinerary/?offertoken={offerToken}`), so it reaches browser
+history, server and proxy logs, and shared itinerary links. One request with
+a held token returns the full record.
 
-## Related surface (not tested)
+## Related surface
 
-The cancellation flow is keyed on the same offerToken model: the
-`doCancelBooking` mutation carries only `{offerToken, cguid, reservationIds}`
-with no account/ownership field. Cross-account cancellation is untested (to
-avoid affecting a booking) but the write path is shaped identically to the
-read path proven above.
+The cancel flow uses the same model. The `doCancelBooking` mutation carries
+`offerToken`, `cguid`, and `reservationIds` with no account or ownership
+field. Cross-account cancellation was not tested to avoid touching a booking.
+The write path is shaped the same way as the read path proven above.
 
-## Remediation
+## Fix
 
-Enforce server-side, on `getOfferDetails` and the related cancel-flow
-operations, that the offerToken's owning account equals the authenticated
-caller's `custId`; return 403 otherwise.
+On `getOfferDetails` and the cancel-flow operations, check that the
+offerToken's owning account equals the authenticated caller's custId.
+Return 403 otherwise.
 
 ## Credit
 
